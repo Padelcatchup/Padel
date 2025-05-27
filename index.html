@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Canchas de Pádel - Mapa Interactivo</title>
+  <!-- Favicon "en blanco" para evitar 404 -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'/>">
   <!-- Tailwind CSS -->
   <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
   <!-- Font Awesome -->
@@ -105,12 +107,15 @@
   /* ============================ EXCEL ============================ */
   async function loadExcel(){
     try {
-      const res = await fetch('Padel2.xlsx');
-      const buf = await res.arrayBuffer();
+      const response = await fetch('./Padel2.xlsx'); // ruta relativa estricta
+      if(!response.ok) throw new Error(`HTTP ${response.status} – no se encontró Padel2.xlsx (¿nombre o ruta incorrectos?)`);
+      const buf = await response.arrayBuffer();
       const wb  = XLSX.read(buf,{type:'array'});
-      const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+      const sheet = wb.SheetNames[0];
+      const data = XLSX.utils.sheet_to_json(wb.Sheets[sheet]);
+      if(!data.length) throw new Error('El Excel está vacío o las columnas no coinciden');
 
-      // Procesamos cada fila
+      // Procesamos filas
       for(const row of data){
         let lat = row.Latitud  || null;
         let lng = row.Longitud || null;
@@ -118,23 +123,26 @@
           const geo = await geocode(`${row.Dirección}, ${row.Localidad}, Buenos Aires, Argentina`);
           lat = geo.lat; lng = geo.lng;
         }
-
-        // Detectar Zona (ej: Localidad “Lanús (GBA Sur)” → zona = GBA Sur)
         let zona = 'Sin zona';
         const m = /(.*)\(([^)]+)\)/.exec(row.Localidad || '');
         if(m) zona = m[2].trim();
 
         canchas.push({
-          nombre: row['Nombre de la Cancha'] || 'Sin nombre',
-          direccion: row.Dirección || 'Sin dirección',
-          localidad: row.Localidad || 'Sin localidad',
-          telefono: row.Teléfono || '',
-          instagram: row.Instagram || '',
-          reserva: row['Link de Reserva'] || '',
-          lat,lng,zona
+          nombre:     row['Nombre de la Cancha'] || 'Sin nombre',
+          direccion:  row.Dirección            || 'Sin dirección',
+          localidad:  row.Localidad            || 'Sin localidad',
+          telefono:   row.Teléfono             || '',
+          instagram:  row.Instagram            || '',
+          reserva:    row['Link de Reserva']   || '',
+          lat, lng, zona
         });
       }
       populateZonaSelect();
+    } catch(e){
+      console.error('Error al abrir el Excel:', e);
+      alert('⚠️ No se pudo cargar Padel2.xlsx. Revisa la ruta, el nombre exacto (con mayúsculas/minúsculas) y confirma que el archivo esté en la rama publicada.');
+    }
+  }
     }catch(e){ console.error('Error cargando Excel', e); alert('No se pudo cargar Padel2.xlsx'); }
   }
 
