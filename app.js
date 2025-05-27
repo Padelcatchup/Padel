@@ -3,11 +3,10 @@ const PadelApp = (() => {
     const EXCEL_FILE_PATH = './Padel2.xlsx';
     const NOMINATIM_API_URL = 'https://nominatim.openstreetmap.org/search';
     // #############################################################################################
-    // ## ¡MUY IMPORTANTE! CAMBIA LA SIGUIENTE LÍNEA POR UN USER-AGENT ÚNICO Y DESCRIPTIVO!      ##
-    // ## EJEMPLO: 'NombreDeTuAppPadel/1.0 (tuemail@example.com o https://tu-proyecto.com)'     ##
-    // ## NO USAR EL VALOR POR DEFECTO EN PRODUCCIÓN O PARA MUCHOS REQUESTS.                     ##
+    // ## ¡MUY IMPORTANTE! REEMPLAZA '(pon_aqui_tu_email_o_contacto)' CON TU INFORMACIÓN REAL.    ##
+    // ## EJEMPLO: 'BuscatucanchadePadel/1.0 (contacto@tuapp.com)'                               ##
     // #############################################################################################
-    const NOMINATIM_USER_AGENT = 'PadelCourtFinderApp/1.0 (PORFAVOR_CAMBIA_ESTO@example.com)'; // <-- ¡¡¡CAMBIA ESTO!!!
+    const NOMINATIM_USER_AGENT = 'BuscatucanchadePadel/1.0 (pablo.bascoy@gmail.com)'; // <-- REEMPLAZA EL INTERIOR DEL PARÉNTESIS
     const DEFAULT_MAP_VIEW = { center: [-34.6118, -58.396], zoom: 11 };
     const USER_LOCATION_ZOOM = 13;
     const SINGLE_MARKER_ZOOM = 15;
@@ -21,7 +20,7 @@ const PadelApp = (() => {
     let currentUserLocation = null;
     let uniqueLocalidadesSet = new Set();
     let uniqueZonasSet = new Set();
-    let initialDataLoadedSuccessfully = false; // Flag para saber si los datos cargaron
+    let initialDataLoadedSuccessfully = false;
 
     // --- CACHÉ DE ELEMENTOS DEL DOM ---
     const DOMElements = {
@@ -32,7 +31,7 @@ const PadelApp = (() => {
     };
 
     // --- FUNCIONES UTILITARIAS ---
-    const Utils = {
+    const Utils = { 
         ensureHttp: (url) => {
             if (!url) return '';
             if (/^https?:\/\//i.test(url)) return url;
@@ -46,7 +45,7 @@ const PadelApp = (() => {
     };
 
     // --- MANEJO DE UI ---
-    const UI = {
+    const UI = { 
         showLoading: (message = "Cargando...") => {
             if (DOMElements.loadingOverlay && DOMElements.loadingMessage) {
                 DOMElements.loadingMessage.textContent = message;
@@ -61,10 +60,10 @@ const PadelApp = (() => {
                 const messageDiv = document.createElement('div');
                 messageDiv.className = `message message-${type}`;
                 messageDiv.textContent = text;
-                if (type !== 'error' && type !== 'warning') { // No limpiar errores/warnings tan rápido
-                    DOMElements.messageArea.innerHTML = ''; // Limpiar mensajes previos si no son errores
+                if (type !== 'error' && type !== 'warning') { 
+                    DOMElements.messageArea.innerHTML = ''; 
                 } else if (DOMElements.messageArea.firstChild && !DOMElements.messageArea.firstChild.className.includes(type)) {
-                    DOMElements.messageArea.innerHTML = ''; // Limpiar si el mensaje anterior no era del mismo tipo de severidad
+                    DOMElements.messageArea.innerHTML = ''; 
                 }
                 DOMElements.messageArea.appendChild(messageDiv);
                 if (duration > 0) {
@@ -108,24 +107,31 @@ const PadelApp = (() => {
     // --- MANEJO DEL MAPA ---
     const MapManager = {
         init: () => {
+            // console.log("MapManager.init: Iniciando mapa..."); 
             if (!DOMElements.mapContainer) {
-                console.error("Error: mapContainer no encontrado en el DOM.");
+                console.error("MapManager.init: mapContainer no encontrado en el DOM.");
                 UI.displayMessage("Error crítico: No se puede inicializar el mapa.", "error");
                 return false;
             }
             try {
+                if (!L || typeof L.map !== 'function') {
+                    console.error("MapManager.init: Leaflet (L) no está cargado o L.map no es una función.");
+                    UI.displayMessage("Error crítico: Librería del mapa (Leaflet) no cargada.", "error");
+                    return false;
+                }
                 mapInstance = L.map(DOMElements.mapContainer);
                 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                     attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                 }).addTo(mapInstance);
 
                 if (typeof L.markerClusterGroup !== 'function') {
-                    console.error("Error crítico: L.markerClusterGroup no está disponible. ¿Se cargó el script correctamente?");
-                    UI.displayMessage("Error al inicializar el mapa: Fallo en la librería de clustering.", "error");
+                    console.error("MapManager.init: L.markerClusterGroup no está disponible.");
+                    UI.displayMessage("Error al inicializar el mapa: Fallo en librería de clustering.", "error");
                     return false;
                 }
                 markerClusterGroup = L.markerClusterGroup();
                 mapInstance.addLayer(markerClusterGroup);
+                // console.log("MapManager.init: Mapa y MarkerClusterGroup inicializados."); 
 
                 const savedView = LocalStorageManager.getMapView();
                 mapInstance.setView(savedView.center, savedView.zoom);
@@ -134,27 +140,31 @@ const PadelApp = (() => {
                     LocalStorageManager.saveMapView({ center: mapInstance.getCenter(), zoom: mapInstance.getZoom() });
                 });
             } catch (e) {
-                console.error("Excepción durante la inicialización del mapa:", e);
+                console.error("MapManager.init: Excepción durante la inicialización del mapa:", e);
                 UI.displayMessage("Error inesperado al inicializar el mapa.", "error");
                 return false;
             }
             return true;
         },
         renderMarkers: () => {
+            // console.log('MapManager.renderMarkers: Llamada. filteredCourtsData count:', filteredCourtsData.length); 
             if (!markerClusterGroup) {
-                console.error("Error crítico: markerClusterGroup no está inicializado.");
-                UI.displayMessage("Error al mostrar marcadores: Fallo en la inicialización del mapa (cluster).", "error");
+                console.error("MapManager.renderMarkers: markerClusterGroup no está inicializado.");
+                UI.displayMessage("Error al mostrar marcadores: Fallo en mapa (cluster).", "error");
                 return;
             }
             if (!L.AwesomeMarkers || typeof L.AwesomeMarkers.icon !== 'function') {
-                console.error("Error crítico: L.AwesomeMarkers no está disponible. ¿Se cargó el script?");
-                UI.displayMessage("Error al mostrar marcadores: Fallo en la librería de iconos.", "error");
+                console.error("MapManager.renderMarkers: L.AwesomeMarkers no disponible.");
+                UI.displayMessage("Error al mostrar marcadores: Fallo en librería de iconos.", "error");
                 return;
             }
 
             markerClusterGroup.clearLayers();
+            let markersAdded = 0;
             try {
                 const canchaIcon = L.AwesomeMarkers.icon({ icon: 'table-tennis-paddle-ball', prefix: 'fas', markerColor: 'green', iconColor: 'white' });
+                // console.log('MapManager.renderMarkers: canchaIcon creado:', canchaIcon ? 'OK' : 'FALLÓ'); 
+                
                 filteredCourtsData.forEach(court => {
                     if (typeof court.lat !== 'number' || typeof court.lng !== 'number' || isNaN(court.lat) || isNaN(court.lng)) {
                         return;
@@ -162,13 +172,15 @@ const PadelApp = (() => {
                     const marker = L.marker([court.lat, court.lng], { icon: canchaIcon });
                     marker.bindPopup(MapManager.buildPopupContent(court));
                     markerClusterGroup.addLayer(marker);
+                    markersAdded++;
                 });
+                // console.log('MapManager.renderMarkers: Marcadores añadidos al cluster:', markersAdded); 
             } catch (error) {
-                console.error("Error durante la creación de AwesomeMarkers.icon o L.marker:", error);
+                console.error("MapManager.renderMarkers: Error durante creación de AwesomeMarkers.icon o L.marker:", error);
                 UI.displayMessage("Ocurrió un error al mostrar los iconos de las canchas.", "error");
             }
         },
-        buildPopupContent: (court) => {
+        buildPopupContent: (court) => { 
             const tel = court.telefono ? `<p><i class='fas fa-phone text-blue-500 mr-2'></i><a href='tel:${court.telefono.replace(/[^0-9+]/g, '')}' class='text-blue-600 hover:underline'>${court.telefono}</a></p>` : '';
             const ig = court.instagram ? `<p><i class='fab fa-instagram text-pink-500 mr-2'></i><a href='${Utils.ensureHttp(court.instagram)}' target='_blank' rel='noopener' class='text-pink-600 hover:underline'>Ver Instagram</a></p>` : '';
             const rs = court.reserva ? `<p><i class='fas fa-calendar-check text-green-500 mr-2'></i><a href='${Utils.ensureHttp(court.reserva)}' target='_blank' rel='noopener' class='text-green-600 hover:underline'>Reservar Online</a></p>` : '';
@@ -182,7 +194,7 @@ const PadelApp = (() => {
                     <p class='mb-2 text-sm text-gray-600'>${court.localidad || 'Sin localidad'} ${court.zona && court.zona !== 'Sin zona' ? `(${court.zona})` : ''}</p>
                     ${tel}${ig}${rs}${distanceInfo}`;
         },
-        adjustViewToFilteredMarkers: () => {
+        adjustViewToFilteredMarkers: () => { 
             if (!mapInstance || !initialDataLoadedSuccessfully) return;
             if (filteredCourtsData.length === 0) return;
             
@@ -199,23 +211,36 @@ const PadelApp = (() => {
             }
         },
         updateUserMarker: (lat, lng) => {
-            if (!mapInstance || !L.AwesomeMarkers) return;
-            const userIcon = L.AwesomeMarkers.icon({ icon: 'street-view', prefix: 'fas', markerColor: 'blue', iconColor: 'white' });
-            if (userLocationMarker) mapInstance.removeLayer(userLocationMarker);
-            userLocationMarker = L.marker([lat, lng], { icon: userIcon })
-                .addTo(mapInstance)
-                .bindPopup("<b>¡Estás aquí!</b>")
-                .openPopup();
-            mapInstance.setView([lat, lng], USER_LOCATION_ZOOM);
+            // console.log('MapManager.updateUserMarker: Llamada con:', lat, lng); 
+            if (!mapInstance) {
+                console.error('MapManager.updateUserMarker: mapInstance no listo.'); return;
+            }
+            if (!L.AwesomeMarkers || typeof L.AwesomeMarkers.icon !== 'function') {
+                 console.error('MapManager.updateUserMarker: L.AwesomeMarkers no disponible.'); return;
+            }
+            try {
+                const userIcon = L.AwesomeMarkers.icon({ icon: 'street-view', prefix: 'fas', markerColor: 'blue', iconColor: 'white' });
+                // console.log('MapManager.updateUserMarker: userIcon creado:', userIcon ? 'OK' : 'FALLÓ'); 
+                if (userLocationMarker) mapInstance.removeLayer(userLocationMarker);
+                userLocationMarker = L.marker([lat, lng], { icon: userIcon })
+                    .addTo(mapInstance)
+                    .bindPopup("<b>¡Estás aquí!</b>")
+                    .openPopup();
+                mapInstance.setView([lat, lng], USER_LOCATION_ZOOM);
+                // console.log('MapManager.updateUserMarker: Marcador de usuario añadido/actualizado.'); 
+            } catch(e) {
+                console.error('MapManager.updateUserMarker: Excepción al crear o añadir marcador de usuario:', e);
+                UI.displayMessage("Error al mostrar tu ubicación en el mapa.", "error");
+            }
         }
     };
 
     // --- MANEJO DE DATOS ---
-    const DataManager = {
+    const DataManager = { 
         loadAndProcessExcel: async () => {
             UI.showLoading("Cargando datos de canchas...");
             allCourtsData = []; uniqueLocalidadesSet.clear(); uniqueZonasSet.clear();
-            initialDataLoadedSuccessfully = false; // Reset flag
+            initialDataLoadedSuccessfully = false; 
             try {
                 const response = await fetch(EXCEL_FILE_PATH);
                 if (!response.ok) throw new Error(`No se pudo cargar el archivo Excel: ${response.status} ${response.statusText}`);
@@ -226,12 +251,12 @@ const PadelApp = (() => {
                 const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
 
                 if (!rows.length) {
-                    UI.displayMessage('El archivo Excel está vacío o no tiene el formato esperado.', 'warning');
-                    UI.hideLoading(); // Ocultar loading si el excel está vacío
-                    return; // No continuar si está vacío
+                    UI.displayMessage('El archivo Excel está vacío.', 'warning');
+                    UI.hideLoading(); 
+                    return; 
                 }
 
-                const geocodingQueue = []; // Direcciones a geocodificar
+                const geocodingQueue = []; 
 
                 for (const row of rows) {
                     let latStr = Utils.pickExcelColumn(row, ['Latitud', 'lat', 'LATITUD']);
@@ -252,7 +277,7 @@ const PadelApp = (() => {
                         telefono: Utils.pickExcelColumn(row, ['Teléfono', 'Telefono']) || '',
                         instagram: Utils.pickExcelColumn(row, ['Instagram']) || '',
                         reserva: Utils.pickExcelColumn(row, ['Link de Reserva', 'Reserva']) || '',
-                        lat, lng // Puede ser NaN aquí
+                        lat, lng 
                     };
 
                     if (!isNaN(lat) && !isNaN(lng)) {
@@ -266,24 +291,21 @@ const PadelApp = (() => {
                     }
                 }
                 
-                // Procesar cola de geocodificación
                 if (geocodingQueue.length > 0) {
                     UI.showLoading(`Geocodificando ${geocodingQueue.length} direcciones...`);
                     for (let i = 0; i < geocodingQueue.length; i++) {
                         const item = geocodingQueue[i];
                         UI.showLoading(`Geocodificando ${i + 1}/${geocodingQueue.length}: ${item.court.nombre}...`);
-                        const geoCoords = await DataManager.geocodeAddress(item.addressString);
+                        const geoCoords = await DataManager.geocodeAddress(item.addressString); 
                         if (geoCoords) {
                             item.court.lat = geoCoords.lat;
                             item.court.lng = geoCoords.lng;
                             allCourtsData.push(item.court);
                             if(item.court.localidad.trim() && item.court.localidad !== 'Sin localidad') uniqueLocalidadesSet.add(item.court.localidad);
                             if(item.court.zona.trim() && item.court.zona !== 'Sin zona') uniqueZonasSet.add(item.court.zona);
-                        } else {
-                            console.warn(`No se pudo geocodificar: ${item.court.nombre} en ${item.addressString}`);
-                        }
-                        if (i < geocodingQueue.length - 1) { // No pausar después del último
-                            await new Promise(resolve => setTimeout(resolve, 1100)); // Pausa > 1s por política de Nominatim
+                        } 
+                        if (i < geocodingQueue.length - 1) { 
+                            await new Promise(resolve => setTimeout(resolve, 1100)); 
                         }
                     }
                 }
@@ -294,13 +316,13 @@ const PadelApp = (() => {
             } catch (error) {
                 console.error("Error cargando o procesando Excel:", error);
                 UI.displayMessage(`Error al cargar datos: ${error.message}. Revisa la consola.`, 'error');
-                allCourtsData = []; // Asegurar estado limpio
+                allCourtsData = []; 
                 initialDataLoadedSuccessfully = false;
             } finally {
                 UI.hideLoading();
             }
         },
-        geocodeAddress: async (address) => {
+        geocodeAddress: async (address) => { 
             if (!address || String(address).trim() === '') {
                 console.warn("Intento de geocodificar una dirección vacía.");
                 return null;
@@ -310,7 +332,7 @@ const PadelApp = (() => {
                 const response = await fetch(url, { headers: { 'User-Agent': NOMINATIM_USER_AGENT } });
                 
                 if (!response.ok) {
-                    const errorText = await response.text(); // Leer el cuerpo del error una sola vez
+                    const errorText = await response.text(); 
                     console.error(`Error de Nominatim (${response.status} ${response.statusText}) para: "${address}". Respuesta: ${errorText}`);
                     if (response.status === 403) { 
                         UI.displayMessage(`Servicio de geocodificación bloqueó la petición (Error 403). Verifica tu User-Agent.`, "error");
@@ -330,7 +352,7 @@ const PadelApp = (() => {
                 return null;
             }
         },
-        populateFilterControls: () => {
+        populateFilterControls: () => { 
             if(DOMElements.selectZona) {
                 DOMElements.selectZona.innerHTML = '<option value="">Filtro rápido por zona</option>';
                 const sortedZonas = [...uniqueZonasSet].sort();
@@ -338,7 +360,7 @@ const PadelApp = (() => {
             }
             DataManager.updateLocalidadesDataList();
         },
-        updateLocalidadesDataList: (selectedZona = '') => {
+        updateLocalidadesDataList: (selectedZona = '') => { 
             if(DOMElements.localidadesDataList) {
                 DOMElements.localidadesDataList.innerHTML = '';
                 let localidadesToShow;
@@ -354,12 +376,12 @@ const PadelApp = (() => {
                 });
             }
         },
-        applyFilters: () => {
-            if (!initialDataLoadedSuccessfully && allCourtsData.length === 0) { // No filtrar si no hay datos
-                UI.updateCounters(); // Para que muestre 0 canchas
+        applyFilters: () => { 
+            if (!initialDataLoadedSuccessfully && allCourtsData.length === 0) { 
+                UI.updateCounters(); 
                 return;
             }
-            UI.clearMessages('info'); // Limpiar mensajes de "no resultados" previos
+            UI.clearMessages('info'); 
             const searchTerm = DOMElements.inputLocalidad ? DOMElements.inputLocalidad.value.toLowerCase().trim() : '';
             const selectedZona = DOMElements.selectZona ? DOMElements.selectZona.value : '';
 
@@ -381,15 +403,18 @@ const PadelApp = (() => {
     };
 
     // --- GEOLOCALIZACIÓN ---
-    const UserLocation = { /* ... (sin cambios respecto a la versión anterior) ... */ 
+    const UserLocation = {
         get: () => {
+            // console.log("UserLocation.get: Solicitando ubicación..."); 
             if (!navigator.geolocation) {
+                console.error("UserLocation.get: Navegador no soporta geolocalización.");
                 UI.displayMessage("La geolocalización no está soportada por tu navegador.", 'error');
                 return;
             }
             UI.showLoading("Obteniendo tu ubicación...");
             navigator.geolocation.getCurrentPosition(
                 (position) => {
+                    // console.log('UserLocation.get: ÉXITO callback. Coords:', position.coords); 
                     UI.hideLoading();
                     currentUserLocation = [position.coords.latitude, position.coords.longitude];
                     MapManager.updateUserMarker(currentUserLocation[0], currentUserLocation[1]);
@@ -397,26 +422,27 @@ const PadelApp = (() => {
                     UI.displayMessage("Ubicación obtenida.", 'success', 3000);
                 },
                 (error) => {
+                    console.error('UserLocation.get: ERROR callback.', error); 
                     UI.hideLoading();
                     currentUserLocation = null;
                     if (userLocationMarker && mapInstance) { mapInstance.removeLayer(userLocationMarker); userLocationMarker = null; }
                     UI.updateCounters();
                     let msg = "Error al obtener la ubicación: ";
                     switch (error.code) {
-                        case error.PERMISSION_DENIED: msg += "Permiso denegado."; break;
-                        case error.POSITION_UNAVAILABLE: msg += "Información no disponible."; break;
-                        case error.TIMEOUT: msg += "Tiempo de espera agotado."; break;
-                        default: msg += "Error desconocido."; break;
+                        case error.PERMISSION_DENIED: msg += "Permiso denegado."; console.warn("UserLocation: Permiso denegado por el usuario."); break;
+                        case error.POSITION_UNAVAILABLE: msg += "Información no disponible."; console.warn("UserLocation: Posición no disponible."); break;
+                        case error.TIMEOUT: msg += "Tiempo de espera agotado."; console.warn("UserLocation: Timeout."); break;
+                        default: msg += "Error desconocido."; console.warn("UserLocation: Error desconocido.", error.code); break;
                     }
                     UI.displayMessage(msg, 'error');
                 },
-                { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+                { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 } 
             );
         }
     };
     
     // --- LOCALSTORAGE ---
-    const LocalStorageManager = { /* ... (sin cambios respecto a la versión anterior) ... */ 
+    const LocalStorageManager = { 
         saveFilters: (filters) => { try { localStorage.setItem('padelMap_filters', JSON.stringify(filters)); } catch (e) { console.warn("LS saveFilters error:", e); }},
         loadFilters: () => { try { const s = localStorage.getItem('padelMap_filters'); return s ? JSON.parse(s) : { localidad: '', zona: '' }; } catch (e) { console.warn("LS loadFilters error:", e); return { localidad: '', zona: '' }; }},
         saveMapView: (view) => { try { localStorage.setItem('padelMap_mapView', JSON.stringify(view)); } catch (e) { console.warn("LS saveMapView error:", e); }},
@@ -433,7 +459,7 @@ const PadelApp = (() => {
     };
 
     // --- EVENT LISTENERS ---
-    const setupEventListeners = () => { /* ... (sin cambios respecto a la versión anterior) ... */ 
+    const setupEventListeners = () => { 
         if(DOMElements.btnGetUserLocation) DOMElements.btnGetUserLocation.addEventListener('click', UserLocation.get);
         if(DOMElements.inputLocalidad) DOMElements.inputLocalidad.addEventListener('input', DataManager.applyFilters);
         if(DOMElements.selectZona) DOMElements.selectZona.addEventListener('change', () => {
@@ -452,26 +478,28 @@ const PadelApp = (() => {
 
     // --- INICIALIZACIÓN ---
     const init = async () => {
+        // console.log("PadelApp.init: Iniciando aplicación..."); 
         for (const elKey in DOMElements) {
             DOMElements[elKey] = document.getElementById(elKey);
             if (!DOMElements[elKey] && elKey !== 'localidadesDataList') {
                 console.warn(`Elemento del DOM no encontrado: #${elKey}.`);
-                if (elKey === 'mapContainer' || elKey === 'loadingOverlay') { // Críticos
+                if (elKey === 'mapContainer' || elKey === 'loadingOverlay') { 
                     document.body.innerHTML = `<p style="color:red; padding:20px;">Error crítico: Falta el elemento #${elKey}. La aplicación no puede iniciar.</p>`;
                     return;
                 }
             }
         }
-        if (!DOMElements.localidadesDataList && DOMElements.inputLocalidad) { // Si hay input pero no datalist
-             console.warn("Datalist 'localidadesDataList' no encontrado, las sugerencias de localidad no funcionarán.");
+        if (!DOMElements.localidadesDataList && DOMElements.inputLocalidad) {
+             console.warn("Datalist 'localidadesDataList' no encontrado.");
         }
 
 
         if (!MapManager.init()) {
              UI.displayMessage("La inicialización del mapa falló. La aplicación no puede continuar.", "error");
-             UI.hideLoading(); // Asegurar que el loading se oculte
+             UI.hideLoading(); 
              return;
         }
+        // console.log("PadelApp.init: Mapa inicializado. Procediendo con datos."); 
 
         const savedFilters = LocalStorageManager.loadFilters();
         if (DOMElements.inputLocalidad && savedFilters.localidad) DOMElements.inputLocalidad.value = savedFilters.localidad;
@@ -483,15 +511,13 @@ const PadelApp = (() => {
                 DOMElements.selectZona.value = savedFilters.zona;
                 DataManager.updateLocalidadesDataList(savedFilters.zona);
             }
-            DataManager.applyFilters(); // Aplicar filtros iniciales
+            DataManager.applyFilters(); 
         } else {
-             // Mensaje ya mostrado por loadAndProcessExcel si falló, o si estaba vacío
-             // Forzar actualización de contadores a 0 si no hay datos.
-            DataManager.applyFilters(); // Esto llamará a updateCounters
+            DataManager.applyFilters(); 
         }
         
         setupEventListeners();
-        // UI.hideLoading(); // Ahora se gestiona principalmente dentro de loadAndProcessExcel y UserLocation.get
+        // console.log("PadelApp.init: Aplicación inicializada y listeners configurados."); 
     };
 
     return { start: init };
