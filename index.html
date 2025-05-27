@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Canchas de Pádel - Mapa Interactivo</title>
-  <!-- Favicon "en blanco" para evitar 404 -->
+  <!-- Favicon “en blanco” para evitar 404 -->
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'/>">
   <!-- Tailwind CSS -->
   <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
@@ -12,7 +12,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css">
   <!-- Leaflet core -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <!-- Leaflet Marker‑Cluster (opcional) -->
+  <!-- Leaflet Marker‑Cluster (opcional) -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
   <style>
@@ -84,8 +84,8 @@
   /* ============================ VARIABLES ============================ */
   let map, clusterLayer;
   let canchas = [];            // Todas las canchas cargadas
-  let filtered = [];           // Canchas tras filtrar
-  let userLocation = null;     // {lat, lng}
+  let filtered = [];           // Canchas después de filtrar
+  let userLocation = null;     // [lat, lng]
   let userMarker  = null;
 
   /* ============================ INICIO ============================ */
@@ -104,18 +104,20 @@
     map.addLayer(clusterLayer);
   }
 
-  /* ============================ EXCEL ============================ */
+  /* ============================ CARGA EXCEL ============================ */
   async function loadExcel(){
     try {
-      const response = await fetch('./Padel2.xlsx'); // ruta relativa estricta
-      if(!response.ok) throw new Error(`HTTP ${response.status} – no se encontró Padel2.xlsx (¿nombre o ruta incorrectos?)`);
+      // 1) La ruta debe ser relativa al HTML publicado en GitHub Pages
+      const response = await fetch('./Padel2.xlsx');
+      if(!response.ok) throw new Error(`HTTP ${response.status} – Padel2.xlsx no encontrado (revisa nombre y rama publicada)`);
+
+      // 2) Leemos el archivo como ArrayBuffer y lo convertimos con SheetJS
       const buf = await response.arrayBuffer();
       const wb  = XLSX.read(buf,{type:'array'});
-      const sheet = wb.SheetNames[0];
-      const data = XLSX.utils.sheet_to_json(wb.Sheets[sheet]);
-      if(!data.length) throw new Error('El Excel está vacío o las columnas no coinciden');
+      const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+      if(!data.length) throw new Error('El Excel está vacío o los encabezados no coinciden');
 
-      // Procesamos filas
+      // 3) Recorremos filas
       for(const row of data){
         let lat = row.Latitud  || null;
         let lng = row.Longitud || null;
@@ -123,115 +125,91 @@
           const geo = await geocode(`${row.Dirección}, ${row.Localidad}, Buenos Aires, Argentina`);
           lat = geo.lat; lng = geo.lng;
         }
-        let zona = 'Sin zona';
-        const m = /(.*)\(([^)]+)\)/.exec(row.Localidad || '');
-        if(m) zona = m[2].trim();
+        const zona = /(.*)\(([^)]+)\)/.exec(row.Localidad || '')?.[2]?.trim() || 'Sin zona';
 
         canchas.push({
-          nombre:     row['Nombre de la Cancha'] || 'Sin nombre',
-          direccion:  row.Dirección            || 'Sin dirección',
-          localidad:  row.Localidad            || 'Sin localidad',
-          telefono:   row.Teléfono             || '',
-          instagram:  row.Instagram            || '',
-          reserva:    row['Link de Reserva']   || '',
+          nombre:    row['Nombre de la Cancha'] || 'Sin nombre',
+          direccion: row.Dirección             || 'Sin dirección',
+          localidad: row.Localidad             || 'Sin localidad',
+          telefono:  row.Teléfono              || '',
+          instagram: row.Instagram             || '',
+          reserva:   row['Link de Reserva']    || '',
           lat, lng, zona
         });
       }
       populateZonaSelect();
-    } catch(e){
-      console.error('Error al abrir el Excel:', e);
-      alert('⚠️ No se pudo cargar Padel2.xlsx. Revisa la ruta, el nombre exacto (con mayúsculas/minúsculas) y confirma que el archivo esté en la rama publicada.');
+    } catch(err){
+      console.error('Error al cargar Padel2.xlsx:', err);
+      alert('⚠️ No se pudo leer Padel2.xlsx. Abre la consola (F12 → Network) para ver si es un 404 o un error CORS. Asegúrate de publicar con GitHub Pages o servirlo con un servidor HTTP.');
     }
   }
-    }catch(e){ console.error('Error cargando Excel', e); alert('No se pudo cargar Padel2.xlsx'); }
-  }
 
+  /* ============================ GEOCODIFICAR ============================ */
   async function geocode(address){
     try{
       const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1`;
       const r = await fetch(url,{headers:{'User-Agent':'PadelMap/1.0'}});
       const j = await r.json();
-      if(j.length) return {lat: +j[0].lat, lng:+j[0].lon};
+      if(j.length) return {lat:+j[0].lat,lng:+j[0].lon};
     }catch{}
-    return {lat:-34.6118, lng:-58.396}; // fallback CABA
+    return {lat:-34.6118,lng:-58.396}; // fallback CABA
   }
 
   /* ============================ FILTROS ============================ */
   function addEvents(){
-    document.getElementById('txtLocalidad').addEventListener('keyup', applyFilters);
-    document.getElementById('selZona').addEventListener('change', applyFilters);
-    document.getElementById('btnClear').addEventListener('click', ()=>{
-      document.getElementById('txtLocalidad').value='';
-      document.getElementById('selZona').value='';
-      applyFilters();
-    });
-    document.getElementById('btnLocation').addEventListener('click', getUserLocation);
+    txtLocalidad.addEventListener('keyup', applyFilters);
+    selZona.addEventListener('change', applyFilters);
+    btnClear.addEventListener('click', ()=>{ txtLocalidad.value=''; selZona.value=''; applyFilters(); });
+    btnLocation.addEventListener('click', getUserLocation);
   }
 
   function applyFilters(){
-    const txt = document.getElementById('txtLocalidad').value.trim().toLowerCase();
-    const zona= document.getElementById('selZona').value;
-
-    filtered = canchas.filter(c=>{
-      const matchTxt  = !txt  || c.localidad.toLowerCase().includes(txt);
-      const matchZona = !zona || c.zona===zona;
-      return matchTxt && matchZona;
-    });
+    const txt  = txtLocalidad.value.trim().toLowerCase();
+    const zona = selZona.value;
+    filtered = canchas.filter(c=>(!txt||c.localidad.toLowerCase().includes(txt)) && (!zona||c.zona===zona));
     renderMarkers();
     updateCounters();
   }
 
   function populateZonaSelect(){
-    const sel = document.getElementById('selZona');
     const zonas = [...new Set(canchas.map(c=>c.zona))].sort();
-    zonas.forEach(z=>{
-      const opt = document.createElement('option'); opt.value=z; opt.textContent=z; sel.appendChild(opt);
-    });
+    zonas.forEach(z=>{ selZona.appendChild(new Option(z,z)); });
   }
 
   /* ============================ MARCADORES ============================ */
   function renderMarkers(){
     clusterLayer.clearLayers();
     filtered.forEach(c=>{
-      const marker = L.marker([c.lat,c.lng]);
-      marker.bindPopup(buildPopup(c));
-      clusterLayer.addLayer(marker);
+      const m = L.marker([c.lat,c.lng]).bindPopup(buildPopup(c));
+      clusterLayer.addLayer(m);
     });
   }
 
-  function buildPopup(c, dist=null){
-    const d = dist?`<div class='distance-info text-white p-2 rounded mb-2 text-center'><i class='fas fa-route mr-1'></i>${dist.toFixed(2)} km</div>`:'';
-
+  function buildPopup(c){
     const tel = c.telefono?`<p><i class='fas fa-phone text-blue-500 mr-2'></i><a href='tel:${c.telefono.replace(/[^0-9+]/g,'')}' class='text-blue-600 hover:underline'>${c.telefono}</a></p>`:'';
     const ig  = c.instagram?`<p><i class='fab fa-instagram text-pink-500 mr-2'></i><a href='${c.instagram}' target='_blank' class='text-pink-600 hover:underline'>Instagram</a></p>`:'';
     const rs  = c.reserva?`<p><i class='fas fa-calendar-check text-green-500 mr-2'></i><a href='${c.reserva}' target='_blank' class='text-green-600 hover:underline'>Reservar</a></p>`:'';
-
-    return `${d}<h3 class='font-semibold text-lg mb-1'>${c.nombre}</h3>
+    return `<h3 class='font-semibold text-lg mb-1'>${c.nombre}</h3>
             <p class='mb-1'><i class='fas fa-map-marker-alt text-red-500 mr-2'></i>${c.direccion}</p>
-            <p class='mb-2 text-gray-600'>${c.localidad}</p>${tel}${ig}${rs}`;}
+            <p class='mb-2 text-gray-600'>${c.localidad}</p>${tel}${ig}${rs}`;
+  }
 
   function updateCounters(){
-    document.getElementById('lblTotal').textContent = filtered.length;
+    lblTotal.textContent = filtered.length;
     if(userLocation){
-      let min = Infinity;
-      filtered.forEach(c=>{
-        const d = map.distance([c.lat,c.lng], userLocation)/1000;
-        if(d<min) min=d;
-      });
-      document.getElementById('lblNearest').textContent = isFinite(min)?`${min.toFixed(2)} km`:'--';
-    }else{
-      document.getElementById('lblNearest').textContent='--';
-    }
+      const min = filtered.reduce((acc,c)=>Math.min(acc,map.distance(userLocation,[c.lat,c.lng])),Infinity);
+      lblNearest.textContent = isFinite(min)?`${(min/1000).toFixed(2)} km`:'--';
+    }else lblNearest.textContent='--';
   }
 
   /* ============================ GEOLOCALIZACIÓN ============================ */
   function getUserLocation(){
-    if(!navigator.geolocation){alert('Tu navegador no soporta geolocalización');return;}
-    navigator.geolocation.getCurrentPosition(pos=>{
-      userLocation = [pos.coords.latitude, pos.coords.longitude];
+    if(!navigator.geolocation){ alert('Tu navegador no soporta geolocalización'); return; }
+    navigator.geolocation.getCurrentPosition(p=>{
+      userLocation = [p.coords.latitude,p.coords.longitude];
       if(userMarker) map.removeLayer(userMarker);
-      userMarker = L.marker(userLocation,{icon:L.icon({iconUrl:'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-icon.png',iconRetinaUrl:'',shadowUrl:''})}).addTo(map);
-      map.setView(userLocation, 12);
+      userMarker = L.marker(userLocation).addTo(map);
+      map.setView(userLocation,12);
       updateCounters();
     },()=>alert('No se pudo obtener tu ubicación'));
   }
