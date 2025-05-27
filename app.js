@@ -1,9 +1,13 @@
 const PadelApp = (() => {
     // --- CONSTANTES DE CONFIGURACIÓN ---
-    const EXCEL_FILE_PATH = './Padel2.xlsx'; // Asegúrate que este archivo esté en la misma carpeta que index.html
+    const EXCEL_FILE_PATH = './Padel2.xlsx';
     const NOMINATIM_API_URL = 'https://nominatim.openstreetmap.org/search';
-    // ¡IMPORTANTE! CAMBIA ESTA LÍNEA POR UN USER AGENT ÚNICO Y VÁLIDO (EJ. NOMBREAPP/VERSION (TU_EMAIL_O_CONTACTO))
-    const NOMINATIM_USER_AGENT = 'PadelCourtFinderApp/1.0 (https://github.com/tu_usuario/tu_repo_o_email)';
+    // #############################################################################################
+    // ## ¡MUY IMPORTANTE! CAMBIA LA SIGUIENTE LÍNEA POR UN USER-AGENT ÚNICO Y DESCRIPTIVO!      ##
+    // ## EJEMPLO: 'NombreDeTuAppPadel/1.0 (tuemail@example.com o https://tu-proyecto.com)'     ##
+    // ## NO USAR EL VALOR POR DEFECTO EN PRODUCCIÓN O PARA MUCHOS REQUESTS.                     ##
+    // #############################################################################################
+    const NOMINATIM_USER_AGENT = 'PadelCourtFinderApp/1.0 (PORFAVOR_CAMBIA_ESTO@example.com)'; // <-- ¡¡¡CAMBIA ESTO!!!
     const DEFAULT_MAP_VIEW = { center: [-34.6118, -58.396], zoom: 11 };
     const USER_LOCATION_ZOOM = 13;
     const SINGLE_MARKER_ZOOM = 15;
@@ -17,6 +21,7 @@ const PadelApp = (() => {
     let currentUserLocation = null;
     let uniqueLocalidadesSet = new Set();
     let uniqueZonasSet = new Set();
+    let initialDataLoadedSuccessfully = false; // Flag para saber si los datos cargaron
 
     // --- CACHÉ DE ELEMENTOS DEL DOM ---
     const DOMElements = {
@@ -35,12 +40,9 @@ const PadelApp = (() => {
             return `https://${url}`;
         },
         pickExcelColumn: (row, potentialKeys) => {
-            // 'k' es el nombre de la columna (ej. 'Latitud', 'lat') que se está probando
             const foundKey = potentialKeys.find(k => row[k] !== undefined && row[k] !== null && String(row[k]).trim() !== '');
-            // Si se encontró una clave válida (foundKey no es undefined), se usa esa clave para obtener el valor de la fila.
             return foundKey ? String(row[foundKey]).trim() : undefined;
         },
-        // debounce: (func, delay) => { /* ...código de debounce... */ }
     };
 
     // --- MANEJO DE UI ---
@@ -59,18 +61,31 @@ const PadelApp = (() => {
                 const messageDiv = document.createElement('div');
                 messageDiv.className = `message message-${type}`;
                 messageDiv.textContent = text;
-                DOMElements.messageArea.innerHTML = '';
+                if (type !== 'error' && type !== 'warning') { // No limpiar errores/warnings tan rápido
+                    DOMElements.messageArea.innerHTML = ''; // Limpiar mensajes previos si no son errores
+                } else if (DOMElements.messageArea.firstChild && !DOMElements.messageArea.firstChild.className.includes(type)) {
+                    DOMElements.messageArea.innerHTML = ''; // Limpiar si el mensaje anterior no era del mismo tipo de severidad
+                }
                 DOMElements.messageArea.appendChild(messageDiv);
                 if (duration > 0) {
                     setTimeout(() => {
-                        if (messageDiv.parentNode === DOMElements.messageArea) {
-                           DOMElements.messageArea.innerHTML = '';
+                        if (messageDiv.parentNode === DOMElements.messageArea && messageDiv.textContent === text) {
+                           DOMElements.messageArea.removeChild(messageDiv);
                         }
                     }, duration);
                 }
             }
         },
-        clearMessages: () => { if (DOMElements.messageArea) DOMElements.messageArea.innerHTML = ''; },
+        clearMessages: (typeToClear = null) => { 
+            if (DOMElements.messageArea) {
+                if (typeToClear) {
+                    const messagesOfType = DOMElements.messageArea.querySelectorAll(`.message-${typeToClear}`);
+                    messagesOfType.forEach(msg => DOMElements.messageArea.removeChild(msg));
+                } else {
+                    DOMElements.messageArea.innerHTML = '';
+                }
+            }
+        },
         updateCounters: () => {
             if (DOMElements.visibleCourtsCount) DOMElements.visibleCourtsCount.textContent = filteredCourtsData.length;
             if (DOMElements.nearestCourtDistance) {
@@ -96,41 +111,62 @@ const PadelApp = (() => {
             if (!DOMElements.mapContainer) {
                 console.error("Error: mapContainer no encontrado en el DOM.");
                 UI.displayMessage("Error crítico: No se puede inicializar el mapa.", "error");
-                return false; // Indicar fallo
+                return false;
             }
-            mapInstance = L.map(DOMElements.mapContainer);
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-            }).addTo(mapInstance);
+            try {
+                mapInstance = L.map(DOMElements.mapContainer);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                }).addTo(mapInstance);
 
-            markerClusterGroup = L.markerClusterGroup();
-            mapInstance.addLayer(markerClusterGroup);
+                if (typeof L.markerClusterGroup !== 'function') {
+                    console.error("Error crítico: L.markerClusterGroup no está disponible. ¿Se cargó el script correctamente?");
+                    UI.displayMessage("Error al inicializar el mapa: Fallo en la librería de clustering.", "error");
+                    return false;
+                }
+                markerClusterGroup = L.markerClusterGroup();
+                mapInstance.addLayer(markerClusterGroup);
 
-            const savedView = LocalStorageManager.getMapView();
-            mapInstance.setView(savedView.center, savedView.zoom);
-            
-            mapInstance.on('moveend zoomend', () => {
-                LocalStorageManager.saveMapView({ center: mapInstance.getCenter(), zoom: mapInstance.getZoom() });
-            });
-            return true; // Indicar éxito
+                const savedView = LocalStorageManager.getMapView();
+                mapInstance.setView(savedView.center, savedView.zoom);
+                
+                mapInstance.on('moveend zoomend', () => {
+                    LocalStorageManager.saveMapView({ center: mapInstance.getCenter(), zoom: mapInstance.getZoom() });
+                });
+            } catch (e) {
+                console.error("Excepción durante la inicialización del mapa:", e);
+                UI.displayMessage("Error inesperado al inicializar el mapa.", "error");
+                return false;
+            }
+            return true;
         },
         renderMarkers: () => {
-            if (!markerClusterGroup || !L.AwesomeMarkers) {
-                console.error("MarkerClusterGroup o AwesomeMarkers no están inicializados.");
+            if (!markerClusterGroup) {
+                console.error("Error crítico: markerClusterGroup no está inicializado.");
+                UI.displayMessage("Error al mostrar marcadores: Fallo en la inicialización del mapa (cluster).", "error");
                 return;
             }
-            markerClusterGroup.clearLayers();
-            const canchaIcon = L.AwesomeMarkers.icon({ icon: 'table-tennis-paddle-ball', prefix: 'fas', markerColor: 'green', iconColor: 'white' });
+            if (!L.AwesomeMarkers || typeof L.AwesomeMarkers.icon !== 'function') {
+                console.error("Error crítico: L.AwesomeMarkers no está disponible. ¿Se cargó el script?");
+                UI.displayMessage("Error al mostrar marcadores: Fallo en la librería de iconos.", "error");
+                return;
+            }
 
-            filteredCourtsData.forEach(court => {
-                if (typeof court.lat !== 'number' || typeof court.lng !== 'number' || isNaN(court.lat) || isNaN(court.lng)) {
-                    console.warn('Marcador omitido por lat/lng inválido:', court.nombre, court);
-                    return;
-                }
-                const marker = L.marker([court.lat, court.lng], { icon: canchaIcon });
-                marker.bindPopup(MapManager.buildPopupContent(court));
-                markerClusterGroup.addLayer(marker);
-            });
+            markerClusterGroup.clearLayers();
+            try {
+                const canchaIcon = L.AwesomeMarkers.icon({ icon: 'table-tennis-paddle-ball', prefix: 'fas', markerColor: 'green', iconColor: 'white' });
+                filteredCourtsData.forEach(court => {
+                    if (typeof court.lat !== 'number' || typeof court.lng !== 'number' || isNaN(court.lat) || isNaN(court.lng)) {
+                        return;
+                    }
+                    const marker = L.marker([court.lat, court.lng], { icon: canchaIcon });
+                    marker.bindPopup(MapManager.buildPopupContent(court));
+                    markerClusterGroup.addLayer(marker);
+                });
+            } catch (error) {
+                console.error("Error durante la creación de AwesomeMarkers.icon o L.marker:", error);
+                UI.displayMessage("Ocurrió un error al mostrar los iconos de las canchas.", "error");
+            }
         },
         buildPopupContent: (court) => {
             const tel = court.telefono ? `<p><i class='fas fa-phone text-blue-500 mr-2'></i><a href='tel:${court.telefono.replace(/[^0-9+]/g, '')}' class='text-blue-600 hover:underline'>${court.telefono}</a></p>` : '';
@@ -147,20 +183,18 @@ const PadelApp = (() => {
                     ${tel}${ig}${rs}${distanceInfo}`;
         },
         adjustViewToFilteredMarkers: () => {
-            if (!mapInstance) return;
-            if (filteredCourtsData.length === 0) {
-                 // No hacer zoom si no hay resultados tras un filtro
-                return;
-            }
-            if (filteredCourtsData.length === 1 && filteredCourtsData[0].lat && filteredCourtsData[0].lng) {
-                mapInstance.setView([filteredCourtsData[0].lat, filteredCourtsData[0].lng], SINGLE_MARKER_ZOOM);
+            if (!mapInstance || !initialDataLoadedSuccessfully) return;
+            if (filteredCourtsData.length === 0) return;
+            
+            const validCoords = filteredCourtsData.filter(c => typeof c.lat === 'number' && typeof c.lng === 'number' && !isNaN(c.lat) && !isNaN(c.lng));
+            if (validCoords.length === 0) return;
+
+            if (validCoords.length === 1) {
+                mapInstance.setView([validCoords[0].lat, validCoords[0].lng], SINGLE_MARKER_ZOOM);
             } else {
-                const validCoords = filteredCourtsData.filter(c => typeof c.lat === 'number' && typeof c.lng === 'number');
-                if (validCoords.length > 0) {
-                    const bounds = L.latLngBounds(validCoords.map(c => [c.lat, c.lng]));
-                    if (bounds.isValid()) {
-                        mapInstance.fitBounds(bounds, { padding: [50, 50] });
-                    }
+                const bounds = L.latLngBounds(validCoords.map(c => [c.lat, c.lng]));
+                if (bounds.isValid()) {
+                    mapInstance.fitBounds(bounds, { padding: [50, 50] });
                 }
             }
         },
@@ -181,9 +215,10 @@ const PadelApp = (() => {
         loadAndProcessExcel: async () => {
             UI.showLoading("Cargando datos de canchas...");
             allCourtsData = []; uniqueLocalidadesSet.clear(); uniqueZonasSet.clear();
+            initialDataLoadedSuccessfully = false; // Reset flag
             try {
                 const response = await fetch(EXCEL_FILE_PATH);
-                if (!response.ok) throw new Error(`No se pudo cargar el archivo Excel (${response.status} ${response.statusText})`);
+                if (!response.ok) throw new Error(`No se pudo cargar el archivo Excel: ${response.status} ${response.statusText}`);
                 const arrayBuffer = await response.arrayBuffer();
                 const workbook = XLSX.read(arrayBuffer, { type: 'array' });
                 const sheetName = workbook.SheetNames[0];
@@ -192,16 +227,13 @@ const PadelApp = (() => {
 
                 if (!rows.length) {
                     UI.displayMessage('El archivo Excel está vacío o no tiene el formato esperado.', 'warning');
-                    return;
+                    UI.hideLoading(); // Ocultar loading si el excel está vacío
+                    return; // No continuar si está vacío
                 }
 
-                const geocodingPromises = [];
-                let courtsProcessed = 0;
+                const geocodingQueue = []; // Direcciones a geocodificar
 
                 for (const row of rows) {
-                    courtsProcessed++;
-                    UI.showLoading(`Procesando cancha ${courtsProcessed} de ${rows.length}...`);
-                    
                     let latStr = Utils.pickExcelColumn(row, ['Latitud', 'lat', 'LATITUD']);
                     let lngStr = Utils.pickExcelColumn(row, ['Longitud', 'lng', 'LONGITUD']);
                     let lat = latStr ? parseFloat(String(latStr).replace(',', '.')) : NaN;
@@ -220,70 +252,78 @@ const PadelApp = (() => {
                         telefono: Utils.pickExcelColumn(row, ['Teléfono', 'Telefono']) || '',
                         instagram: Utils.pickExcelColumn(row, ['Instagram']) || '',
                         reserva: Utils.pickExcelColumn(row, ['Link de Reserva', 'Reserva']) || '',
-                        lat, lng
+                        lat, lng // Puede ser NaN aquí
                     };
 
                     if (!isNaN(lat) && !isNaN(lng)) {
                         allCourtsData.push(court);
-                        if(localidad !== 'Sin localidad') uniqueLocalidadesSet.add(localidad);
-                        if(zona !== 'Sin zona') uniqueZonasSet.add(zona);
-                    } else if (direccion !== 'Dirección no disponible' && localidad !== 'Sin localidad') {
-                        geocodingPromises.push(
-                            DataManager.geocodeAddress(`${direccion}, ${localidad}, Buenos Aires, Argentina`)
-                                .then(geoCoords => {
-                                    if (geoCoords) {
-                                        court.lat = geoCoords.lat;
-                                        court.lng = geoCoords.lng;
-                                        allCourtsData.push(court);
-                                        if(localidad !== 'Sin localidad') uniqueLocalidadesSet.add(localidad);
-                                        if(zona !== 'Sin zona') uniqueZonasSet.add(zona);
-                                    } else {
-                                        console.warn(`No se pudo geocodificar: ${nombre} en ${direccion}, ${localidad}`);
-                                    }
-                                }).catch(err => console.error(`Error en promesa de geocodificación para ${nombre}:`, err))
-                        );
-                        // Control de tasa para Nominatim
-                        if (geocodingPromises.length >= 5) { // Procesar en lotes
-                            UI.showLoading(`Geocodificando lote de ${geocodingPromises.length} direcciones...`);
-                            await Promise.all(geocodingPromises.splice(0, geocodingPromises.length)); // Procesar todas las actuales y vaciar
-                            await new Promise(resolve => setTimeout(resolve, 1100)); // Pausa > 1s por política de Nominatim
-                        }
+                        if(localidad.trim() && localidad !== 'Sin localidad') uniqueLocalidadesSet.add(localidad);
+                        if(zona.trim() && zona !== 'Sin zona') uniqueZonasSet.add(zona);
+                    } else if (direccion !== 'Dirección no disponible' && localidad.trim() && localidad !== 'Sin localidad') {
+                        geocodingQueue.push({ court, addressString: `${direccion}, ${localidad}, Buenos Aires, Argentina` });
                     } else {
-                         console.warn(`Cancha '${nombre}' omitida por falta de lat/lng y dirección/localidad completa.`);
+                         console.warn(`Cancha '${nombre}' omitida (pre-geocodificación) por falta de lat/lng y/o dirección/localidad completa.`);
                     }
                 }
                 
-                if (geocodingPromises.length > 0) { // Procesar promesas restantes
-                    UI.showLoading(`Finalizando geocodificación de ${geocodingPromises.length} direcciones...`);
-                    await Promise.all(geocodingPromises);
+                // Procesar cola de geocodificación
+                if (geocodingQueue.length > 0) {
+                    UI.showLoading(`Geocodificando ${geocodingQueue.length} direcciones...`);
+                    for (let i = 0; i < geocodingQueue.length; i++) {
+                        const item = geocodingQueue[i];
+                        UI.showLoading(`Geocodificando ${i + 1}/${geocodingQueue.length}: ${item.court.nombre}...`);
+                        const geoCoords = await DataManager.geocodeAddress(item.addressString);
+                        if (geoCoords) {
+                            item.court.lat = geoCoords.lat;
+                            item.court.lng = geoCoords.lng;
+                            allCourtsData.push(item.court);
+                            if(item.court.localidad.trim() && item.court.localidad !== 'Sin localidad') uniqueLocalidadesSet.add(item.court.localidad);
+                            if(item.court.zona.trim() && item.court.zona !== 'Sin zona') uniqueZonasSet.add(item.court.zona);
+                        } else {
+                            console.warn(`No se pudo geocodificar: ${item.court.nombre} en ${item.addressString}`);
+                        }
+                        if (i < geocodingQueue.length - 1) { // No pausar después del último
+                            await new Promise(resolve => setTimeout(resolve, 1100)); // Pausa > 1s por política de Nominatim
+                        }
+                    }
                 }
-
+                initialDataLoadedSuccessfully = true;
                 DataManager.populateFilterControls();
-                UI.displayMessage(`Se cargaron ${allCourtsData.length} canchas.`, 'success', 4000);
+                UI.displayMessage(`Se procesaron ${rows.length} registros. ${allCourtsData.length} canchas cargadas.`, 'success', 4000);
 
             } catch (error) {
                 console.error("Error cargando o procesando Excel:", error);
-                UI.displayMessage(`Error al cargar datos: ${error.message}. Revisa la consola para más detalles.`, 'error');
-                allCourtsData = [];
+                UI.displayMessage(`Error al cargar datos: ${error.message}. Revisa la consola.`, 'error');
+                allCourtsData = []; // Asegurar estado limpio
+                initialDataLoadedSuccessfully = false;
             } finally {
                 UI.hideLoading();
             }
         },
         geocodeAddress: async (address) => {
+            if (!address || String(address).trim() === '') {
+                console.warn("Intento de geocodificar una dirección vacía.");
+                return null;
+            }
             try {
-                const url = `${NOMINATIM_API_URL}?format=json&limit=1&q=${encodeURIComponent(address)}`;
+                const url = `${NOMINATIM_API_URL}?format=json&addressdetails=1&limit=1&q=${encodeURIComponent(address)}`;
                 const response = await fetch(url, { headers: { 'User-Agent': NOMINATIM_USER_AGENT } });
+                
                 if (!response.ok) {
-                    const errorText = await response.text();
-                    console.error(`Error de Nominatim (${response.status}): ${errorText} para la dirección: ${address}`);
-                    // Si es 429 (Too Many Requests), podríamos intentar reintentar con backoff exponencial (más avanzado)
+                    const errorText = await response.text(); // Leer el cuerpo del error una sola vez
+                    console.error(`Error de Nominatim (${response.status} ${response.statusText}) para: "${address}". Respuesta: ${errorText}`);
+                    if (response.status === 403) { 
+                        UI.displayMessage(`Servicio de geocodificación bloqueó la petición (Error 403). Verifica tu User-Agent.`, "error");
+                    } else if (response.status === 429) { 
+                         UI.displayMessage(`Demasiadas peticiones al servicio de geocodificación (Error 429).`, "warning");
+                    }
                     return null;
                 }
                 const data = await response.json();
                 if (data && data.length > 0 && data[0].lat && data[0].lon) {
                     return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
                 }
-                console.warn(`Nominatim no devolvió coordenadas para: ${address}`, data);
+                console.warn(`Nominatim no devolvió coordenadas válidas para: "${address}"`, data);
                 return null;
             } catch (error) {
                 console.error(`Excepción durante geocodificación de "${address}":`, error);
@@ -315,14 +355,13 @@ const PadelApp = (() => {
             }
         },
         applyFilters: () => {
-            UI.clearMessages();
-            const searchTerm = DOMElements.inputLocalidad ? DOMElements.inputLocalidad.value.toLowerCase().trim() : '';
-            const selectedZona = DOMElements.selectZona ? DOMElements.selectZona.value : '';
-
-            if (allCourtsData.length === 0 && !UI.loadingOverlay.classList.contains('hidden')) {
-                // No aplicar filtros si los datos aún no se han cargado (o fallaron)
+            if (!initialDataLoadedSuccessfully && allCourtsData.length === 0) { // No filtrar si no hay datos
+                UI.updateCounters(); // Para que muestre 0 canchas
                 return;
             }
+            UI.clearMessages('info'); // Limpiar mensajes de "no resultados" previos
+            const searchTerm = DOMElements.inputLocalidad ? DOMElements.inputLocalidad.value.toLowerCase().trim() : '';
+            const selectedZona = DOMElements.selectZona ? DOMElements.selectZona.value : '';
 
             filteredCourtsData = allCourtsData.filter(court => {
                 const matchLocalidad = !searchTerm || (court.localidad && court.localidad.toLowerCase().includes(searchTerm));
@@ -342,7 +381,7 @@ const PadelApp = (() => {
     };
 
     // --- GEOLOCALIZACIÓN ---
-    const UserLocation = {
+    const UserLocation = { /* ... (sin cambios respecto a la versión anterior) ... */ 
         get: () => {
             if (!navigator.geolocation) {
                 UI.displayMessage("La geolocalización no está soportada por tu navegador.", 'error');
@@ -377,9 +416,9 @@ const PadelApp = (() => {
     };
     
     // --- LOCALSTORAGE ---
-    const LocalStorageManager = {
+    const LocalStorageManager = { /* ... (sin cambios respecto a la versión anterior) ... */ 
         saveFilters: (filters) => { try { localStorage.setItem('padelMap_filters', JSON.stringify(filters)); } catch (e) { console.warn("LS saveFilters error:", e); }},
-        loadFilters: () => { try { const s = localStorage.getItem('padelMap_filters'); return s ? JSON.parse(s) : { l: '', z: '' }; } catch (e) { console.warn("LS loadFilters error:", e); return { l: '', z: '' }; }},
+        loadFilters: () => { try { const s = localStorage.getItem('padelMap_filters'); return s ? JSON.parse(s) : { localidad: '', zona: '' }; } catch (e) { console.warn("LS loadFilters error:", e); return { localidad: '', zona: '' }; }},
         saveMapView: (view) => { try { localStorage.setItem('padelMap_mapView', JSON.stringify(view)); } catch (e) { console.warn("LS saveMapView error:", e); }},
         getMapView: () => {
             try {
@@ -394,7 +433,7 @@ const PadelApp = (() => {
     };
 
     // --- EVENT LISTENERS ---
-    const setupEventListeners = () => {
+    const setupEventListeners = () => { /* ... (sin cambios respecto a la versión anterior) ... */ 
         if(DOMElements.btnGetUserLocation) DOMElements.btnGetUserLocation.addEventListener('click', UserLocation.get);
         if(DOMElements.inputLocalidad) DOMElements.inputLocalidad.addEventListener('input', DataManager.applyFilters);
         if(DOMElements.selectZona) DOMElements.selectZona.addEventListener('change', () => {
@@ -415,33 +454,44 @@ const PadelApp = (() => {
     const init = async () => {
         for (const elKey in DOMElements) {
             DOMElements[elKey] = document.getElementById(elKey);
-            if (!DOMElements[elKey] && elKey !== 'localidadesDataList') { // datalist es opcional si el input no existe
-                console.warn(`Elemento del DOM no encontrado: #${elKey}. Algunas funciones podrían no estar disponibles.`);
-                if (elKey === 'mapContainer' || elKey === 'loadingOverlay') {
+            if (!DOMElements[elKey] && elKey !== 'localidadesDataList') {
+                console.warn(`Elemento del DOM no encontrado: #${elKey}.`);
+                if (elKey === 'mapContainer' || elKey === 'loadingOverlay') { // Críticos
                     document.body.innerHTML = `<p style="color:red; padding:20px;">Error crítico: Falta el elemento #${elKey}. La aplicación no puede iniciar.</p>`;
                     return;
                 }
             }
         }
-        DOMElements.localidadesDataList = document.getElementById('localidadesDataList'); // Re-asignar por si el ID es diferente
+        if (!DOMElements.localidadesDataList && DOMElements.inputLocalidad) { // Si hay input pero no datalist
+             console.warn("Datalist 'localidadesDataList' no encontrado, las sugerencias de localidad no funcionarán.");
+        }
 
-        if (!MapManager.init()) { // Si el mapa no se pudo inicializar, detener.
+
+        if (!MapManager.init()) {
+             UI.displayMessage("La inicialización del mapa falló. La aplicación no puede continuar.", "error");
+             UI.hideLoading(); // Asegurar que el loading se oculte
              return;
         }
 
         const savedFilters = LocalStorageManager.loadFilters();
         if (DOMElements.inputLocalidad && savedFilters.localidad) DOMElements.inputLocalidad.value = savedFilters.localidad;
         
-        await DataManager.loadAndProcessExcel();
+        await DataManager.loadAndProcessExcel(); // Carga datos y actualiza initialDataLoadedSuccessfully
 
-        if (DOMElements.selectZona && savedFilters.zona && DOMElements.selectZona.querySelector(`option[value="${savedFilters.zona}"]`)) {
-            DOMElements.selectZona.value = savedFilters.zona;
-            DataManager.updateLocalidadesDataList(savedFilters.zona);
+        if (initialDataLoadedSuccessfully) {
+            if (DOMElements.selectZona && savedFilters.zona && DOMElements.selectZona.querySelector(`option[value="${savedFilters.zona}"]`)) {
+                DOMElements.selectZona.value = savedFilters.zona;
+                DataManager.updateLocalidadesDataList(savedFilters.zona);
+            }
+            DataManager.applyFilters(); // Aplicar filtros iniciales
+        } else {
+             // Mensaje ya mostrado por loadAndProcessExcel si falló, o si estaba vacío
+             // Forzar actualización de contadores a 0 si no hay datos.
+            DataManager.applyFilters(); // Esto llamará a updateCounters
         }
         
-        DataManager.applyFilters();
         setupEventListeners();
-        // UI.hideLoading(); // Se maneja dentro de loadAndProcessExcel y UserLocation.get
+        // UI.hideLoading(); // Ahora se gestiona principalmente dentro de loadAndProcessExcel y UserLocation.get
     };
 
     return { start: init };
