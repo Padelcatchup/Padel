@@ -290,7 +290,7 @@ const PadelApp = (() => {
         geocodeAddress: async (address) => {
             try {
                 const url = `${NOMINATIM_API_URL}?format=json&limit=1&q=${encodeURIComponent(address)}`;
-                const response = await fetch(url, { headers: { 'User-Agent': Ubica tu Cancha de Padel } });
+                const response = await fetch(url, { headers: { 'User-Agent': 'Ubica tu Cancha de Padel' } });
                 if (!response.ok) {
                     console.error(`Error de Nominatim (${response.status}): ${await response.text()}`);
                     return null;
