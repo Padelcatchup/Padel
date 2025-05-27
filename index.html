@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Canchas de Pádel - Mapa Interactivo</title>
+  <!-- Tailwind CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+  <!-- Font Awesome -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css">
+  <!-- Leaflet core -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <!-- Leaflet Marker‑Cluster (opcional) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+  <style>
+    #map { height: 70vh; }
+    .leaflet-popup-content { font-size: .9rem; width: 300px; }
+    .distance-info { background: linear-gradient(135deg,#667eea 0%,#764ba2 100%); }
+  </style>
+</head>
+<body class="bg-gray-100">
+  <div class="container mx-auto px-4 py-6">
+    <!-- CABECERA -->
+    <div class="bg-white rounded-lg shadow-lg mb-6">
+      <div class="bg-gradient-to-r from-green-500 to-blue-600 text-white p-6 rounded-t-lg">
+        <h1 class="text-3xl font-bold flex items-center">
+          <i class="fas fa-map-marker-alt mr-3"></i> Canchas de Pádel en Buenos Aires
+        </h1>
+        <p class="opacity-90 mt-1">Encuentra la cancha más cercana y reserva al instante.</p>
+      </div>
+
+      <div class="p-6">
+        <!-- TARJETAS RESUMEN -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <div class="bg-blue-50 p-4 rounded-lg text-center">
+            <i class="fas fa-location-arrow text-blue-500 text-2xl mb-2"></i>
+            <h3 class="font-semibold text-gray-800">Mi Ubicación</h3>
+            <button id="btnLocation" class="mt-2 bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition"><i class="fas fa-crosshairs mr-2"></i>Obtener</button>
+          </div>
+
+          <div class="bg-green-50 p-4 rounded-lg text-center">
+            <i class="fas fa-table-tennis text-green-500 text-2xl mb-2"></i>
+            <h3 class="font-semibold text-gray-800">Canchas visibles</h3>
+            <p id="lblTotal" class="text-2xl font-bold text-green-600">--</p>
+          </div>
+
+          <div class="bg-purple-50 p-4 rounded-lg text-center">
+            <i class="fas fa-ruler text-purple-500 text-2xl mb-2"></i>
+            <h3 class="font-semibold text-gray-800">Más cercana</h3>
+            <p id="lblNearest" class="text-2xl font-bold text-purple-600">--</p>
+          </div>
+        </div>
+
+        <!-- FILTROS -->
+        <div class="flex flex-col md:flex-row items-center gap-4 mb-6">
+          <div class="flex items-center w-full md:flex-1">
+            <i class="fas fa-search text-blue-500 text-xl mr-3"></i>
+            <input id="txtLocalidad" type="text" placeholder="Escriba el nombre de la localidad o barrio…" class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring focus:ring-blue-300 focus:outline-none">
+          </div>
+
+          <button id="btnClear" class="bg-gray-500 text-white px-6 py-2 rounded-lg hover:bg-gray-600 transition flex items-center"><i class="fas fa-times mr-2"></i>Limpiar</button>
+
+          <select id="selZona" class="border border-gray-300 rounded-lg px-4 py-2 w-full md:w-auto">
+            <option value="">Filtro rápido por zona</option>
+          </select>
+        </div>
+
+        <div id="map" class="rounded-lg shadow-lg border-2 border-gray-200"></div>
+
+        <div class="mt-4 text-sm text-gray-600 flex items-center justify-center"><i class="fas fa-info-circle mr-2"></i>Haz clic en un marcador para más detalles y distancia.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Librerías JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+  <script>
+  /* ============================ VARIABLES ============================ */
+  let map, clusterLayer;
+  let canchas = [];            // Todas las canchas cargadas
+  let filtered = [];           // Canchas tras filtrar
+  let userLocation = null;     // {lat, lng}
+  let userMarker  = null;
+
+  /* ============================ INICIO ============================ */
+  document.addEventListener('DOMContentLoaded', async ()=>{
+    initMap();
+    await loadExcel();
+    applyFilters();
+    addEvents();
+  });
+
+  /* ============================ MAPA ============================ */
+  function initMap(){
+    map = L.map('map').setView([-34.6118,-58.396], 11);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ attribution:'© OpenStreetMap'}).addTo(map);
+    clusterLayer = L.markerClusterGroup();
+    map.addLayer(clusterLayer);
+  }
+
+  /* ============================ EXCEL ============================ */
+  async function loadExcel(){
+    try {
+      const res = await fetch('Padel2.xlsx');
+      const buf = await res.arrayBuffer();
+      const wb  = XLSX.read(buf,{type:'array'});
+      const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+
+      // Procesamos cada fila
+      for(const row of data){
+        let lat = row.Latitud  || null;
+        let lng = row.Longitud || null;
+        if(!lat || !lng){
+          const geo = await geocode(`${row.Dirección}, ${row.Localidad}, Buenos Aires, Argentina`);
+          lat = geo.lat; lng = geo.lng;
+        }
+
+        // Detectar Zona (ej: Localidad “Lanús (GBA Sur)” → zona = GBA Sur)
+        let zona = 'Sin zona';
+        const m = /(.*)\(([^)]+)\)/.exec(row.Localidad || '');
+        if(m) zona = m[2].trim();
+
+        canchas.push({
+          nombre: row['Nombre de la Cancha'] || 'Sin nombre',
+          direccion: row.Dirección || 'Sin dirección',
+          localidad: row.Localidad || 'Sin localidad',
+          telefono: row.Teléfono || '',
+          instagram: row.Instagram || '',
+          reserva: row['Link de Reserva'] || '',
+          lat,lng,zona
+        });
+      }
+      populateZonaSelect();
+    }catch(e){ console.error('Error cargando Excel', e); alert('No se pudo cargar Padel2.xlsx'); }
+  }
+
+  async function geocode(address){
+    try{
+      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1`;
+      const r = await fetch(url,{headers:{'User-Agent':'PadelMap/1.0'}});
+      const j = await r.json();
+      if(j.length) return {lat: +j[0].lat, lng:+j[0].lon};
+    }catch{}
+    return {lat:-34.6118, lng:-58.396}; // fallback CABA
+  }
+
+  /* ============================ FILTROS ============================ */
+  function addEvents(){
+    document.getElementById('txtLocalidad').addEventListener('keyup', applyFilters);
+    document.getElementById('selZona').addEventListener('change', applyFilters);
+    document.getElementById('btnClear').addEventListener('click', ()=>{
+      document.getElementById('txtLocalidad').value='';
+      document.getElementById('selZona').value='';
+      applyFilters();
+    });
+    document.getElementById('btnLocation').addEventListener('click', getUserLocation);
+  }
+
+  function applyFilters(){
+    const txt = document.getElementById('txtLocalidad').value.trim().toLowerCase();
+    const zona= document.getElementById('selZona').value;
+
+    filtered = canchas.filter(c=>{
+      const matchTxt  = !txt  || c.localidad.toLowerCase().includes(txt);
+      const matchZona = !zona || c.zona===zona;
+      return matchTxt && matchZona;
+    });
+    renderMarkers();
+    updateCounters();
+  }
+
+  function populateZonaSelect(){
+    const sel = document.getElementById('selZona');
+    const zonas = [...new Set(canchas.map(c=>c.zona))].sort();
+    zonas.forEach(z=>{
+      const opt = document.createElement('option'); opt.value=z; opt.textContent=z; sel.appendChild(opt);
+    });
+  }
+
+  /* ============================ MARCADORES ============================ */
+  function renderMarkers(){
+    clusterLayer.clearLayers();
+    filtered.forEach(c=>{
+      const marker = L.marker([c.lat,c.lng]);
+      marker.bindPopup(buildPopup(c));
+      clusterLayer.addLayer(marker);
+    });
+  }
+
+  function buildPopup(c, dist=null){
+    const d = dist?`<div class='distance-info text-white p-2 rounded mb-2 text-center'><i class='fas fa-route mr-1'></i>${dist.toFixed(2)} km</div>`:'';
+
+    const tel = c.telefono?`<p><i class='fas fa-phone text-blue-500 mr-2'></i><a href='tel:${c.telefono.replace(/[^0-9+]/g,'')}' class='text-blue-600 hover:underline'>${c.telefono}</a></p>`:'';
+    const ig  = c.instagram?`<p><i class='fab fa-instagram text-pink-500 mr-2'></i><a href='${c.instagram}' target='_blank' class='text-pink-600 hover:underline'>Instagram</a></p>`:'';
+    const rs  = c.reserva?`<p><i class='fas fa-calendar-check text-green-500 mr-2'></i><a href='${c.reserva}' target='_blank' class='text-green-600 hover:underline'>Reservar</a></p>`:'';
+
+    return `${d}<h3 class='font-semibold text-lg mb-1'>${c.nombre}</h3>
+            <p class='mb-1'><i class='fas fa-map-marker-alt text-red-500 mr-2'></i>${c.direccion}</p>
+            <p class='mb-2 text-gray-600'>${c.localidad}</p>${tel}${ig}${rs}`;}
+
+  function updateCounters(){
+    document.getElementById('lblTotal').textContent = filtered.length;
+    if(userLocation){
+      let min = Infinity;
+      filtered.forEach(c=>{
+        const d = map.distance([c.lat,c.lng], userLocation)/1000;
+        if(d<min) min=d;
+      });
+      document.getElementById('lblNearest').textContent = isFinite(min)?`${min.toFixed(2)} km`:'--';
+    }else{
+      document.getElementById('lblNearest').textContent='--';
+    }
+  }
+
+  /* ============================ GEOLOCALIZACIÓN ============================ */
+  function getUserLocation(){
+    if(!navigator.geolocation){alert('Tu navegador no soporta geolocalización');return;}
+    navigator.geolocation.getCurrentPosition(pos=>{
+      userLocation = [pos.coords.latitude, pos.coords.longitude];
+      if(userMarker) map.removeLayer(userMarker);
+      userMarker = L.marker(userLocation,{icon:L.icon({iconUrl:'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-icon.png',iconRetinaUrl:'',shadowUrl:''})}).addTo(map);
+      map.setView(userLocation, 12);
+      updateCounters();
+    },()=>alert('No se pudo obtener tu ubicación'));
+  }
+  </script>
+</body>
+</html>
