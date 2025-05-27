@@ -7,6 +7,8 @@ const PadelApp = (() => {
     // ## EJEMPLO: 'BuscatucanchadePadel/1.0 (contacto@tuapp.com)'                               ##
     // #############################################################################################
     const NOMINATIM_USER_AGENT = 'BuscatucanchadePadel/1.0 (pablo.bascoy@gmail.com)'; // <-- REEMPLAZA EL INTERIOR DEL PARÉNTESIS
+    const GEOCODE_CACHE_KEY_PREFIX = 'padelMap_geocode_'; // CACHÉ GEO: Prefijo para las claves de caché
+    const GEOCODE_CACHE_EXPIRY_DAYS = 30; // CACHÉ GEO: Cuántos días mantener una entrada de caché
     const DEFAULT_MAP_VIEW = { center: [-34.6118, -58.396], zoom: 11 };
     const USER_LOCATION_ZOOM = 13;
     const SINGLE_MARKER_ZOOM = 15;
@@ -23,7 +25,7 @@ const PadelApp = (() => {
     let initialDataLoadedSuccessfully = false;
 
     // --- CACHÉ DE ELEMENTOS DEL DOM ---
-    const DOMElements = {
+    const DOMElements = { /* ... (sin cambios) ... */ 
         loadingOverlay: null, loadingMessage: null, messageArea: null,
         btnGetUserLocation: null, visibleCourtsCount: null, nearestCourtDistance: null,
         inputLocalidad: null, localidadesDataList: null, selectZona: null,
@@ -31,7 +33,7 @@ const PadelApp = (() => {
     };
 
     // --- FUNCIONES UTILITARIAS ---
-    const Utils = { 
+    const Utils = { /* ... (sin cambios) ... */ 
         ensureHttp: (url) => {
             if (!url) return '';
             if (/^https?:\/\//i.test(url)) return url;
@@ -45,7 +47,7 @@ const PadelApp = (() => {
     };
 
     // --- MANEJO DE UI ---
-    const UI = { 
+    const UI = { /* ... (sin cambios) ... */ 
         showLoading: (message = "Cargando...") => {
             if (DOMElements.loadingOverlay && DOMElements.loadingMessage) {
                 DOMElements.loadingMessage.textContent = message;
@@ -105,7 +107,7 @@ const PadelApp = (() => {
     };
 
     // --- MANEJO DEL MAPA ---
-    const MapManager = {
+    const MapManager = { /* ... (sin cambios significativos) ... */ 
         init: () => {
             // console.log("MapManager.init: Iniciando mapa..."); 
             if (!DOMElements.mapContainer) {
@@ -238,6 +240,8 @@ const PadelApp = (() => {
     // --- MANEJO DE DATOS ---
     const DataManager = { 
         loadAndProcessExcel: async () => {
+            // ... (lógica de carga y parseo de Excel sin cambios aquí) ...
+            // La modificación principal estará en cómo se llama y usa geocodeAddress
             UI.showLoading("Cargando datos de canchas...");
             allCourtsData = []; uniqueLocalidadesSet.clear(); uniqueZonasSet.clear();
             initialDataLoadedSuccessfully = false; 
@@ -296,7 +300,10 @@ const PadelApp = (() => {
                     for (let i = 0; i < geocodingQueue.length; i++) {
                         const item = geocodingQueue[i];
                         UI.showLoading(`Geocodificando ${i + 1}/${geocodingQueue.length}: ${item.court.nombre}...`);
+                        
+                        // CACHÉ GEO: Llamada a geocodeAddress (que ahora usa caché)
                         const geoCoords = await DataManager.geocodeAddress(item.addressString); 
+                        
                         if (geoCoords) {
                             item.court.lat = geoCoords.lat;
                             item.court.lng = geoCoords.lng;
@@ -304,6 +311,7 @@ const PadelApp = (() => {
                             if(item.court.localidad.trim() && item.court.localidad !== 'Sin localidad') uniqueLocalidadesSet.add(item.court.localidad);
                             if(item.court.zona.trim() && item.court.zona !== 'Sin zona') uniqueZonasSet.add(item.court.zona);
                         } 
+                        // CACHÉ GEO: No es necesario pausar si viene de caché, pero la pausa general por si algunas no están cacheadas es buena.
                         if (i < geocodingQueue.length - 1) { 
                             await new Promise(resolve => setTimeout(resolve, 1100)); 
                         }
@@ -327,6 +335,17 @@ const PadelApp = (() => {
                 console.warn("Intento de geocodificar una dirección vacía.");
                 return null;
             }
+            const normalizedAddressKey = GEOCODE_CACHE_KEY_PREFIX + address.toLowerCase().trim().replace(/\s+/g, '_'); // CACHÉ GEO: Clave normalizada
+
+            // CACHÉ GEO: Intentar obtener de localStorage
+            const cachedEntry = LocalStorageManager.getGeocodedAddress(normalizedAddressKey);
+            if (cachedEntry) {
+                console.log(`%cGeocodificación desde CACHÉ para: "${address}"`, "color: green;");
+                return cachedEntry.coords;
+            }
+
+            // CACHÉ GEO: Si no está en caché, proceder con Nominatim
+            console.log(`%cGeocodificando con NOMINATIM para: "${address}"`, "color: orange;");
             try {
                 const url = `${NOMINATIM_API_URL}?format=json&addressdetails=1&limit=1&q=${encodeURIComponent(address)}`;
                 const response = await fetch(url, { headers: { 'User-Agent': NOMINATIM_USER_AGENT } });
@@ -334,25 +353,27 @@ const PadelApp = (() => {
                 if (!response.ok) {
                     const errorText = await response.text(); 
                     console.error(`Error de Nominatim (${response.status} ${response.statusText}) para: "${address}". Respuesta: ${errorText}`);
-                    if (response.status === 403) { 
-                        UI.displayMessage(`Servicio de geocodificación bloqueó la petición (Error 403). Verifica tu User-Agent.`, "error");
-                    } else if (response.status === 429) { 
-                         UI.displayMessage(`Demasiadas peticiones al servicio de geocodificación (Error 429).`, "warning");
-                    }
+                    // No guardar error en caché, para que se intente de nuevo la próxima vez.
+                    // Opcional: guardar un "fallo conocido" para no reintentar por un tiempo.
                     return null;
                 }
                 const data = await response.json();
                 if (data && data.length > 0 && data[0].lat && data[0].lon) {
-                    return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+                    const coords = { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+                    // CACHÉ GEO: Guardar resultado exitoso en localStorage
+                    LocalStorageManager.saveGeocodedAddress(normalizedAddressKey, coords);
+                    return coords;
                 }
                 console.warn(`Nominatim no devolvió coordenadas válidas para: "${address}"`, data);
+                // CACHÉ GEO: Opcional: guardar un "no encontrado" para no reintentar por un tiempo.
+                // LocalStorageManager.saveGeocodedAddress(normalizedAddressKey, null, true); // true para indicar fallo
                 return null;
             } catch (error) {
                 console.error(`Excepción durante geocodificación de "${address}":`, error);
                 return null;
             }
         },
-        populateFilterControls: () => { 
+        populateFilterControls: () => { /* ... (sin cambios) ... */ 
             if(DOMElements.selectZona) {
                 DOMElements.selectZona.innerHTML = '<option value="">Filtro rápido por zona</option>';
                 const sortedZonas = [...uniqueZonasSet].sort();
@@ -360,7 +381,7 @@ const PadelApp = (() => {
             }
             DataManager.updateLocalidadesDataList();
         },
-        updateLocalidadesDataList: (selectedZona = '') => { 
+        updateLocalidadesDataList: (selectedZona = '') => { /* ... (sin cambios) ... */ 
             if(DOMElements.localidadesDataList) {
                 DOMElements.localidadesDataList.innerHTML = '';
                 let localidadesToShow;
@@ -376,7 +397,7 @@ const PadelApp = (() => {
                 });
             }
         },
-        applyFilters: () => { 
+        applyFilters: () => { /* ... (sin cambios) ... */ 
             if (!initialDataLoadedSuccessfully && allCourtsData.length === 0) { 
                 UI.updateCounters(); 
                 return;
@@ -403,7 +424,7 @@ const PadelApp = (() => {
     };
 
     // --- GEOLOCALIZACIÓN ---
-    const UserLocation = {
+    const UserLocation = { /* ... (sin cambios) ... */ 
         get: () => {
             // console.log("UserLocation.get: Solicitando ubicación..."); 
             if (!navigator.geolocation) {
@@ -455,11 +476,66 @@ const PadelApp = (() => {
                 }
             } catch (e) { console.warn("LS getMapView error:", e); }
             return DEFAULT_MAP_VIEW;
+        },
+        // CACHÉ GEO: Nuevas funciones para la caché de geocodificación
+        saveGeocodedAddress: (key, coords) => {
+            try {
+                const expiry = new Date().getTime() + (GEOCODE_CACHE_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+                const item = { coords, expiry };
+                localStorage.setItem(key, JSON.stringify(item));
+                console.log(`%cGuardado en CACHÉ: ${key}`, "color: blue;");
+            } catch (e) {
+                console.warn("LS saveGeocodedAddress error (posiblemente localStorage lleno):", e);
+                // Podríamos implementar una limpieza de caché aquí si se llena
+                LocalStorageManager.cleanupGeocodeCache();
+            }
+        },
+        getGeocodedAddress: (key) => {
+            try {
+                const itemStr = localStorage.getItem(key);
+                if (!itemStr) return null;
+
+                const item = JSON.parse(itemStr);
+                const now = new Date().getTime();
+
+                if (now > item.expiry) { // CACHÉ GEO: Expiró
+                    localStorage.removeItem(key);
+                    console.log(`%cEntrada de CACHÉ expirada y eliminada: ${key}`, "color: gray;");
+                    return null;
+                }
+                return item; // Devuelve { coords, expiry }
+            } catch (e) {
+                console.warn("LS getGeocodedAddress error:", e);
+                return null;
+            }
+        },
+        // CACHÉ GEO: Opcional: Función para limpiar entradas antiguas de caché si localStorage se llena
+        cleanupGeocodeCache: (force = false) => {
+            console.log("Intentando limpiar caché de geocodificación...");
+            let itemsRemoved = 0;
+            const now = new Date().getTime();
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith(GEOCODE_CACHE_KEY_PREFIX)) {
+                    try {
+                        const itemStr = localStorage.getItem(key);
+                        if (itemStr) {
+                            const item = JSON.parse(itemStr);
+                            if (force || now > item.expiry) {
+                                localStorage.removeItem(key);
+                                itemsRemoved++;
+                                i--; // Ajustar índice porque se eliminó un item
+                            }
+                        }
+                    } catch (e) { /* ignorar errores al parsear/remover items individuales */ }
+                }
+            }
+            if (itemsRemoved > 0) console.log(`Limpieza de caché: ${itemsRemoved} entradas eliminadas.`);
         }
     };
 
     // --- EVENT LISTENERS ---
-    const setupEventListeners = () => { 
+    const setupEventListeners = () => { /* ... (sin cambios) ... */ 
         if(DOMElements.btnGetUserLocation) DOMElements.btnGetUserLocation.addEventListener('click', UserLocation.get);
         if(DOMElements.inputLocalidad) DOMElements.inputLocalidad.addEventListener('input', DataManager.applyFilters);
         if(DOMElements.selectZona) DOMElements.selectZona.addEventListener('change', () => {
@@ -493,6 +569,8 @@ const PadelApp = (() => {
              console.warn("Datalist 'localidadesDataList' no encontrado.");
         }
 
+        // CACHÉ GEO: Limpiar caché expirada al inicio (opcional, pero buena práctica)
+        LocalStorageManager.cleanupGeocodeCache();
 
         if (!MapManager.init()) {
              UI.displayMessage("La inicialización del mapa falló. La aplicación no puede continuar.", "error");
@@ -504,7 +582,7 @@ const PadelApp = (() => {
         const savedFilters = LocalStorageManager.loadFilters();
         if (DOMElements.inputLocalidad && savedFilters.localidad) DOMElements.inputLocalidad.value = savedFilters.localidad;
         
-        await DataManager.loadAndProcessExcel(); // Carga datos y actualiza initialDataLoadedSuccessfully
+        await DataManager.loadAndProcessExcel(); 
 
         if (initialDataLoadedSuccessfully) {
             if (DOMElements.selectZona && savedFilters.zona && DOMElements.selectZona.querySelector(`option[value="${savedFilters.zona}"]`)) {
